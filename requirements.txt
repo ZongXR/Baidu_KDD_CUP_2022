@@ -1,0 +1,3 @@
+numpy~=1.18.5
+pandas~=1.1.0
+paddlepaddle-gpu~=2.3.0
