@@ -9,3 +9,5 @@ kddcup22-sdwpf-evaluation
 **.ipynb_checkpoints
 
 __pycache__
+
+logs

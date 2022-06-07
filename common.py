@@ -1,332 +1,163 @@
 # -*-Encoding: utf-8 -*-
-################################################################################
-#
-# Copyright (c) 2022 Baidu.com, Inc. All Rights Reserved
-#
-################################################################################
-"""
-Description: Common utilities for Wind Power Forecasting
-Authors: Lu,Xinjiang (luxinjiang@baidu.com)
-Date:    2022/03/10
-"""
-from typing import Callable
-import time
+from typing import Optional, Union
+from pandas import DataFrame, Series
 import numpy as np
-import paddle
-import paddle.nn as nn
-import random
-from paddle.io import DataLoader
-from model import BaselineGruModel
-from wind_turbine_data import WindTurbineDataset, WindTurbineData
-from test_data import TestData
+from numpy import ndarray
+import tensorflow as tf
 
 
-def adjust_learning_rate(optimizer, epoch, args):
-    # type: (paddle.optimizer.Adam, int, dict) -> None
+class Scaler(object):
     """
-    Desc:
-        Adjust learning rate
-    Args:
-        optimizer:
-        epoch:
-        args:
-    Returns:
-        None
+    Desc: Normalization utilities\n
     """
-    # lr = args.lr * (0.2 ** (epoch // 2))
-    lr_adjust = {}
-    if args["lr_adjust"] == 'type1':
-        # learning_rate = 0.5^{epoch-1}
-        lr_adjust = {epoch: args["lr"] * (0.50 ** (epoch - 1))}
-    elif args["lr_adjust"] == 'type2':
-        lr_adjust = {
-            2: 5e-5, 4: 1e-5, 6: 5e-6, 8: 1e-6,
-            10: 5e-7, 15: 1e-7, 20: 5e-8
-        }
-    if epoch in lr_adjust:
-        lr = lr_adjust[epoch]
-        optimizer.set_lr(lr)
 
+    def __init__(self, _settings: dict):
+        self.mean = 0.
+        self.std = 1.
+        self.target = _settings["target"]
 
-class EarlyStopping(object):
-    """
-    Desc:
-        EarlyStopping
-    """
-    def __init__(self, patience=7, verbose=False, delta=0):
-        self.patience = patience
-        self.verbose = verbose
-        self.counter = 0
-        self.best_score = None
-        self.early_stop = False
-        self.val_loss_min = np.Inf
-        self.delta = delta
-        self.best_model = False
+    def fit(self, data: Union[ndarray, DataFrame, Series]) -> None:
+        """
+        制作一个标准化器\n
+        :param data: 输入
+        :return
+        """
+        self.mean = data.mean()
+        self.std = data.std()
 
-    def save_checkpoint(self, val_loss, model, path, tid):
-        # type: (nn.MSELoss, BaselineGruModel, str, int) -> None
+    def transform(self, data: Union[ndarray, DataFrame, Series]) -> Union[ndarray, DataFrame, Series]:
         """
         Desc:
-            Save current checkpoint
+            Transform the data
         Args:
-            val_loss: the validation loss
-            model: the model
-            path: the path to be saved
-            tid: turbine ID
+            data:
         Returns:
-            None
+            The transformed data
         """
-        self.best_model = True
-        self.val_loss_min = val_loss
-        paddle.save(model.state_dict(), path + '/' + 'model_' + str(tid))
+        mean = self.mean
+        std = self.std
+        return (data - mean) / std
 
-    def __call__(self, val_loss, model, path, tid):
-        # type: (nn.MSELoss, BaselineGruModel, str, int) -> None
+    def inverse_transform(self, data: Union[ndarray, DataFrame, Series], only_target: bool = False) -> Union[ndarray, DataFrame, Series]:
         """
         Desc:
-            __call__
+            Restore to the original data
         Args:
-            val_loss: the validation loss
-            model: the model
-            path: the path to be saved
-            tid: turbine ID
+            data: the transformed data
         Returns:
-            None
+            The original data
         """
-        score = -val_loss
-        if self.best_score is None:
-            self.best_score = score
-            self.save_checkpoint(val_loss, model, path, tid)
-        elif score < self.best_score + self.delta:
-            self.counter += 1
-            self.best_model = False
-            if self.counter >= self.patience:
-                self.early_stop = True
+        mean = self.mean
+        std = self.std
+        if only_target:
+            return (data * std.loc[self.target]) + mean.loc[self.target]
         else:
-            self.best_score = score
-            self.update_hidden = True
-            self.save_checkpoint(val_loss, model, path, tid)
-            self.counter = 0
+            return (data * std) + mean
 
 
-class Experiment(object):
+def windowed_dataset(
+        series: np.ndarray,
+        sequence_length: int,
+        x_end_index: int,
+        y_start_index: Optional[int],
+        x_dim: Optional[int] = None,
+        y_dim: Optional[int] = 1,
+        batch_size: int = 1,
+        shuffle_buffer: Optional[int] = 10
+) -> tf.raw_ops.PrefetchDataset:
     """
-    Desc:
-        The experiment to train, validate and test a model
+    滑动窗口划分数据集\n
+    :param series: 时间序列
+    :param sequence_length: 窗口长度，包括x和y
+    :param x_end_index: x结束的索引
+    :param y_start_index: y开始的索引。如果只有自变量则该参数为None，此时x_end_index参数无效
+    :param x_dim: 输入的维度
+    :param y_dim: 输出的维度
+    :param batch_size: 批量大小
+    :param shuffle_buffer: 洗牌缓冲区大小，设置为1000即可。如果不需要洗牌，将该参数设置为None或0
+    :return: 划分后的时间序列
     """
-    def __init__(self, args):
-        # type: (dict) -> None
-        """
-        Desc:
-            __init__
-        Args:
-            args: the arguments to initialize the experimental environment
-        """
-        self.model = BaselineGruModel(args)
-        self.args = args
-
-    def get_model(self):
-        # type: () -> BaselineGruModel
-        """
-        Desc:
-            the model
-        Returns:
-            An instance of the model
-        """
-        return self.model
-
-    def get_args(self):
-        # type: () -> dict
-        """
-        Desc:
-            Get the arguments
-        Returns:
-            A dict
-        """
-        return self.args
-
-    def get_data(self, flag):
-        # type: (str) -> (WindTurbineDataset, DataLoader)
-        """
-        Desc:
-            get_data
-        Args:
-            flag: train or test
-        Returns:
-            A dataset and a dataloader
-        """
-        if flag == 'test':
-            shuffle_flag = False
-            drop_last = True
-        else:
-            shuffle_flag = True
-            drop_last = True
-        data_set = WindTurbineDataset(
-            data_path=self.args["data_path"],
-            filename=self.args["filename"],
-            flag=flag,
-            size=[self.args["input_len"], self.args["output_len"]],
-            task=self.args["task"],
-            target=self.args["target"],
-            start_col=self.args["start_col"],
-            turbine_id=self.args["turbine_id"],
-            day_len=self.args["day_len"],
-            train_days=self.args["train_size"],
-            val_days=self.args["val_size"],
-            test_days=self.args["test_size"],
-            total_days=self.args["total_size"]
-        )
-        data_loader = DataLoader(
-            data_set,
-            batch_size=self.args["batch_size"],
-            shuffle=shuffle_flag,
-            num_workers=self.args["num_workers"],
-            drop_last=drop_last
-        )
-        return data_set, data_loader
-
-    def load_train_data(self):
-        # type: () -> WindTurbineData
-        """
-        Desc:
-            Load train data to get the scaler for testing
-        Returns:
-            The train set
-        """
-        train_data = WindTurbineData(
-            data_path=self.args["data_path"],
-            filename=self.args["filename"],
-            flag='train',
-            size=[self.args["input_len"], self.args["output_len"]],
-            task=self.args["task"],
-            target=self.args["target"],
-            start_col=self.args["start_col"],
-            day_len=self.args["day_len"],
-            train_days=self.args["train_size"],
-            val_days=self.args["val_size"],
-            total_days=self.args["total_size"],
-            is_test=True
-        )
-        return train_data
-
-    @staticmethod
-    def get_test_x(args):
-        # type: (dict) -> TestData
-        """
-        Desc:
-            Obtain the input sequence for testing
-        Args:
-            args:
-        Returns:
-            Normalized input sequences and training data
-        """
-        test_x = TestData(path_to_data=args["path_to_test_x"], farm_capacity=args["capacity"])
-        return test_x
-
-    def inference_one_sample(self, model, sample_x):
-        # type: (BaselineGruModel, paddle.tensor) -> paddle.tensor
-        """
-        Desc:
-            Inference one sample
-        Args:
-            model:
-            sample_x:
-        Returns:
-            Predicted sequence with sample_x as input
-        """
-        x = sample_x.astype('float32')
-        prediction = model(x)
-        f_dim = -1 if self.args["task"] == 'MS' else 0
-        return prediction[..., :, f_dim:].astype('float32')
-
-    def get_optimizer(self):
-        # type: () -> paddle.optimizer.Adam
-        """
-        Desc:
-            Get the optimizer
-        Returns:
-            An optimizer
-        """
-        clip = paddle.nn.ClipGradByNorm(clip_norm=50.0)
-        model_optim = paddle.optimizer.Adam(parameters=self.model.parameters(),
-                                            learning_rate=self.args["lr"],
-                                            grad_clip=clip)
-        return model_optim
-
-    @staticmethod
-    def get_criterion():
-        # type: () -> nn.MSELoss
-        """
-        Desc:
-            Use the mse loss as the criterion
-        Returns:
-            MSE loss
-        """
-        criterion = nn.MSELoss(reduction='mean')
-        return criterion
-
-    def process_one_batch(self, batch_x, batch_y):
-        # type: (paddle.tensor, paddle.tensor) -> (paddle.tensor, paddle.tensor)
-        """
-        Desc:
-            Process a batch
-        Args:
-            batch_x:
-            batch_y:
-        Returns:
-            prediction and ground truth
-        """
-        batch_x = batch_x.astype('float32')
-        batch_y = batch_y.astype('float32')
-        sample = self.model(batch_x)
-        #
-        # If the task is the multivariate-to-univariate forecasting task,
-        # the last column is the target variable to be predicted
-        f_dim = -1 if self.args["task"] == 'MS' else 0
-        #
-        batch_y = batch_y[:, -self.args["output_len"]:, f_dim:].astype('float32')
-        sample = sample[..., :, f_dim:].astype('float32')
-        return sample, batch_y
+    ds: tf.raw_ops.TensorSliceDataset = tf.data.Dataset.from_tensor_slices(series.astype("float32"))
+    if y_start_index is not None:
+        ds: tf.raw_ops.WindowDataset = ds.window(sequence_length, shift=1, drop_remainder=True)
+        ds: tf.raw_ops.FlatMapDataset = ds.flat_map(lambda w: w.batch(sequence_length))
+        if shuffle_buffer:
+            ds: tf.raw_ops.ShuffleDataset = ds.shuffle(shuffle_buffer)
+        ds: tf.raw_ops.MapDataset = ds.map(lambda w: (w[0:x_end_index, 0:x_dim], w[y_start_index:, -y_dim:]))
+    else:
+        ds: tf.raw_ops.WindowDataset = ds.window(sequence_length, shift=1, drop_remainder=True)
+        ds: tf.raw_ops.FlatMapDataset = ds.flat_map(lambda w: w.batch(sequence_length))
+        if shuffle_buffer:
+            ds: tf.raw_ops.ShuffleDataset = ds.shuffle(shuffle_buffer)
+    ds: tf.raw_ops.BatchDataset = ds.batch(batch_size, drop_remainder=False)
+    return ds.prefetch(1)
 
 
-fix_seed = 3407
-random.seed(fix_seed)
-paddle.seed(fix_seed)
-np.random.seed(fix_seed)
-
-
-def traverse_wind_farm(method, params, model_path, flag='train'):
-    # type: (Callable, dict, str, str) -> list
+def get_turb(data: DataFrame, turb_id: int, _settings: dict) -> (tf.raw_ops.PrefetchDataset, ):
     """
-    Desc:
-        Traverse the turbines in a wind farm on by one
-    Args:
-        method: the method for training or testing on the records of one turbine
-        params: the arguments initialized
-        model_path: the folder name of the model
-        flag: 'train' or 'test'
-    Returns:
-        Predictions (for test) or None
+    获取一个风机的数据\n
+    :param data: 原始数据
+    :param turb_id: 风机id
+    :param _settings: 设置项
+    :return: train_data, val_data
     """
-    responses = []
-    start_time = time.time()
-    for i in range(params["capacity"]):
-        params["turbine_id"] = i
-        exp = Experiment(params)
-        if 'train' == flag:
-            print('>>>>>>> Training Turbine {:3d} >>>>>>>>>>>>>>>>>>>>>>>>>>\n'.format(i))
-            method(exp, model_path, is_debug=params["is_debug"])
-        elif 'test' == flag:
-            print('>>>>>>> Forecasting Turbine {:3d} >>>>>>>>>>>>>>>>>>>>>>>>>>\n'.format(i))
-            res = method(exp, model_path)
-            responses.append(res)
-        else:
-            pass
-        paddle.device.cuda.empty_cache()
-        if params["is_debug"]:
-            end_time = time.time()
-            print("Elapsed time for {} turbine {} is {} secs".format("training" if "train" == flag else "predicting", i,
-                                                                     end_time - start_time))
-            start_time = end_time
-    if 'test' == flag:
-        return responses
+    turbine_id = _settings["turbine_id"]
+    start_col = _settings["start_col"]
+    input_len = _settings["input_len"]
+    output_len = _settings["output_len"]
+    in_var = _settings["in_var"]
+    out_var = _settings["out_var"]
+    train_size = _settings["train_size"]
+    data = data[data[turbine_id] == turb_id]
+    scl = Scaler(_settings)
+    scl.fit(data.iloc[:, start_col:])
+    data.iloc[:, start_col:] = scl.transform(data.iloc[:, start_col:])
+    xy_train = data[data["Day"] <= train_size].fillna(0).iloc[:, start_col:]
+    xy_val = data[data["Day"] > train_size].fillna(0).iloc[:, start_col:]
+    return windowed_dataset(
+        series=xy_train.values,
+        sequence_length=input_len + output_len,
+        x_end_index=input_len,
+        y_start_index=input_len,
+        x_dim=in_var,
+        y_dim=out_var,
+        batch_size=_settings["batch_size"]
+    ), windowed_dataset(
+        series=xy_val.values,
+        sequence_length=input_len + output_len,
+        x_end_index=input_len,
+        y_start_index=input_len,
+        x_dim=in_var,
+        y_dim=out_var,
+        batch_size=_settings["batch_size"]
+    )
+
+
+def get_turb_test(data: DataFrame, turb_id: int, _settings: dict) -> (tf.raw_ops.PrefetchDataset, Scaler):
+    """
+    获取一个风机的数据\n
+    :param data: 原始数据
+    :param turb_id: 风机id
+    :param _settings: 设置项
+    :return: 测试集x
+    """
+    turbine_id = _settings["turbine_id"]
+    start_col = _settings["start_col"]
+    input_len = _settings["input_len"]
+    output_len = _settings["output_len"]
+    in_var = _settings["in_var"]
+    out_var = _settings["out_var"]
+    data = data[data[turbine_id] == turb_id]
+    scl = Scaler(_settings)
+    scl.fit(data.iloc[:, start_col:])
+    data.iloc[:, start_col:] = scl.transform(data.iloc[:, start_col:])
+    xy_train = data.fillna(0).iloc[-input_len:, start_col:]
+    return windowed_dataset(
+        series=xy_train.values,
+        sequence_length=input_len,
+        x_end_index=input_len,
+        y_start_index=None,
+        x_dim=in_var,
+        y_dim=out_var,
+        batch_size=_settings["batch_size"]
+    ), scl
