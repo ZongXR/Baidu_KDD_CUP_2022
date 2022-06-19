@@ -10,4 +10,6 @@ kddcup22-sdwpf-evaluation
 
 __pycache__
 
+nohup.out
+
 logs

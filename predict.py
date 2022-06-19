@@ -21,9 +21,10 @@ def forecast(_settings: dict) -> np.ndarray:
     """
     capacity = _settings["capacity"]
     output_len = _settings["output_len"]
-    results = np.zeros(shape=(capacity, output_len, 1), dtype=float)
+    out_var = _settings["out_var"]
+    results = np.zeros(shape=(capacity, output_len, out_var), dtype=float)
     turbine_id = _settings["turbine_id"]
-    filepath = os.path.join(_settings["data_path"], _settings["filename"])
+    filepath = os.path.join(_settings["path_to_test_x"], _settings["file_to_test_x"])
     data = pd.read_csv(filepath)
     turb_ids = data[turbine_id].unique().tolist()
     model = WPF(0, _settings)
@@ -40,4 +41,4 @@ def forecast(_settings: dict) -> np.ndarray:
 if __name__ == '__main__':
     settings = prep_env()
 
-    print(forecast(settings))
+    print(forecast(settings).shape)

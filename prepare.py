@@ -11,6 +11,8 @@ def prep_env() -> dict:
         "pred_file": "predict.py",
         "start_col": 3,
         "framework": "tensorflow",
+        "path_to_test_x": "./data/sdwpf_baidukddcup2022_test_toy/test_x/0001in.csv",
+        "path_to_test_y": "./data/sdwpf_baidukddcup2022_test_toy/test_y/0001out.csv",
         "data_path": "./data",
         "filename": "wtbdata_245days.csv",
         "target": "Patv",
@@ -36,13 +38,11 @@ def prep_env() -> dict:
 
 
 
-        "path_to_test_x": "./data/sdwpf_baidukddcup2022_test_toy/test_x",
-        "path_to_test_y": "./data/sdwpf_baidukddcup2022_test_toy/test_y",
+
         "task": "MS",
         "day_len": 144,
         "total_size": 245,
         "gpu": 0,
-
     }
 
     print("The experimental settings are: \n{}".format(str(settings)))
