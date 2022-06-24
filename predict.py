@@ -24,7 +24,7 @@ def forecast(_settings: dict) -> np.ndarray:
     out_var = _settings["out_var"]
     results = np.zeros(shape=(capacity, output_len, out_var), dtype=float)
     turbine_id = _settings["turbine_id"]
-    filepath = os.path.join(_settings["path_to_test_x"], _settings["file_to_test_x"])
+    filepath = _settings["path_to_test_x"]
     data = pd.read_csv(filepath)
     turb_ids = data[turbine_id].unique().tolist()
     model = WPF(0, _settings)
