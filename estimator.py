@@ -49,8 +49,8 @@ class WPF(Model):
         self.lr_adjust = settings["lr_adjust"]
 
         self.pad_1 = Lambda(function=lambda x: tf.pad(x, [[0, 0], [0, self.output_len], [0, 0]], mode="CONSTANT", constant_values=0), name="pad_1")
-        self.gru_1 = GRU(units=48, return_sequences=True, return_state=False, time_major=True, name="gru_1")
-        self.gru_2 = GRU(units=48, return_sequences=True, return_state=False, time_major=True, name="gru_2")
+        self.gru_1 = GRU(units=64, return_sequences=True, return_state=False, name="gru_1")
+        self.gru_2 = GRU(units=64, return_sequences=True, return_state=False, name="gru_2")
         self.dropout_3 = Dropout(rate=self.dropout, name="dropout_3")
         self.linear_4 = Dense(units=self.out_var, activation=None, name="linear_4")
         self.output_layer_5 = Lambda(function=lambda x: x[:, -self.output_len:, :], name="output_5")
@@ -69,10 +69,8 @@ class WPF(Model):
 
     def call(self, inputs, training=None, mask=None):
         result = self.pad_1(inputs)
-        result = tf.transpose(result, perm=(1, 0, 2))
         result = self.gru_1(result)
         result = self.gru_2(result)
-        result = tf.transpose(result, perm=(1, 0, 2))
         result = self.dropout_3(result)
         result = self.linear_4(result)
         result = self.output_layer_5(result)
@@ -144,8 +142,8 @@ class WPF(Model):
             callbacks=[
                 TensorBoard(log_dir=os.path.join(self.logdir, strftime("%Y%m%d_%H.%M.%S", localtime())), write_graph=True, write_images=True),
                 EarlyStopping(monitor="val_loss", patience=self.patience, restore_best_weights=True),
-                LearningRateScheduler(schedule=adjust_lr_type1 if self.lr_adjust == "type1" else adjust_lr_type2, verbose=int(self.is_debug)),
-                # ReduceLROnPlateau(monitor="val_loss", factor=0.5, patience=4, verbose=int(self.is_debug), min_lr=1e-6),
+                # LearningRateScheduler(schedule=adjust_lr_type1 if self.lr_adjust == "type1" else adjust_lr_type2, verbose=int(self.is_debug)),
+                ReduceLROnPlateau(monitor="val_loss", factor=0.5, patience=2, verbose=int(self.is_debug)),
                 OneTurbCallback(self.turb_id, train_begin=True)
             ],
             **kwargs
