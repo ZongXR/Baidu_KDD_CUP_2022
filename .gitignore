@@ -13,3 +13,5 @@ __pycache__
 nohup.out
 
 logs
+
+data/wtbdata_245days.csv
